@@ -9,7 +9,6 @@ void format_log_entry(char *logstring, struct sockaddr_in *sockaddr, char *uri, 
  */
 int main(int argc, char **argv)
 {
-	/* Check arguments */
 	if (argc != 2)
 	{
 		fprintf(stderr, "Usage: %s <port number>\n", argv[0]);
@@ -49,8 +48,9 @@ int parse_uri(char *uri, char *hostname, char *pathname, int *port)
 
 	/* Extract the port number */
 	*port = 80; /* default */
+	
 	if (*hostend == ':')
-	*port = atoi(hostend + 1);
+		*port = atoi(hostend + 1);
 
 	/* Extract the path */
 	pathbegin = strchr(hostbegin, '/');
@@ -62,7 +62,7 @@ int parse_uri(char *uri, char *hostname, char *pathname, int *port)
 	{
 		pathbegin++;
 		strcpy(pathname, pathbegin);
-		}
+	}
 
 	return 0;
 }
