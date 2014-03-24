@@ -1,0 +1,10 @@
+****************
+HTTP Proxy
+****************
+
+Makefile	- For building and handing in proxy
+README		- This file
+
+# Proxy source files
+proxy.{c,h}	- Primary proxy code
+
