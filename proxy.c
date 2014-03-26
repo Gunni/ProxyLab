@@ -17,6 +17,7 @@
 #include <assert.h>
 #include <stdbool.h>
 #include <string.h>
+#include <pthread.h>
 #include <time.h>
 #include "csapp.h"
 
@@ -24,6 +25,8 @@
 
 /* do not accept headers larger than MAX_HEADER_SIZE */
 static const ssize_t MAX_HEADER_SIZE = 16384;
+
+#define BUFFER_SIZE (16384)
 
 struct string
 {
@@ -40,6 +43,14 @@ struct proxy_connection
 	socklen_t server_len;
 	int client_fd;
 	int server_fd;
+	size_t client_size;
+	size_t server_size;
+	size_t client_offset;
+	size_t server_offset;
+	char client_recv_buffer[BUFFER_SIZE];
+	char client_send_buffer[BUFFER_SIZE];
+	char server_recv_buffer[BUFFER_SIZE];
+	char server_send_buffer[BUFFER_SIZE];
 };
 
 struct proxy_log
@@ -66,6 +77,18 @@ enum http_method
 	TRACE,
 	CONNECT,
 	PATCH,
+};
+
+static const char *str_http_method[] = {
+	"OPTIONS",
+	"GET",
+	"HEAD",
+	"POST",
+	"PUT",
+	"DELETE",
+	"TRACE",
+	"CONNECT",
+	"PATCH",
 };
 
 /*
@@ -268,17 +291,17 @@ proxy_header_complete (const char *header, size_t size)
 
 /* Extracts a single line from the header and advances the header pointer */
 static bool
-proxy_header_line (const char **header, size_t *size, const char **line, size_t *line_size)
+proxy_header_line (const char **header, size_t *size, struct string *line)
 {
 	const char *end = memmem (*header, *size, "\r\n", 2);
 
 	if (end == NULL || end == *header)
 		return false;
 
-	*line = *header;
-	*line_size = end - *header + 2;
-	*header += *line_size;
-	*size -= *line_size;
+	line->len = end - *header + 2;
+	line->str = *header;
+	*header += line->len;
+	*size -= line->len;
 
 	return true;
 }
@@ -286,53 +309,39 @@ proxy_header_line (const char **header, size_t *size, const char **line, size_t 
 /* Parses the initial HTTP head entry */
 static bool
 proxy_header_parse_head (
-	const char *line,
-	size_t size,
+	const struct string line,
 	enum http_method *method,
-	const char **location,
-	size_t *location_size,
-	const char **version,
-	size_t *version_size)
+	struct string *location,
+	struct string *version)
 {
 	const char *space;
-	const char *methods[] = {
-		"OPTIONS",
-		"GET",
-		"HEAD",
-		"POST",
-		"PUT",
-		"DELETE",
-		"TRACE",
-		"CONNECT",
-		"PATCH",
-	};
 
-	for (size_t i = 0; i < sizeof (methods) / sizeof (*methods); ++i)
+	for (size_t i = 0; i < sizeof (str_http_method) / sizeof (*str_http_method); ++i)
 	{
-		size_t len = strlen (methods[i]);
+		size_t len = strlen (str_http_method[i]);
 
 		/* terminating \r\n and a space */
-		if (size <= len + 3)
+		if (line.len <= len + 3)
 			continue;
 
 		/* have we found the correct method? */
-		if (memcmp (methods[i], line, len) == 0)
+		if (memcmp (str_http_method[i], line.str, len) == 0)
 		{
 			/* the following byte should be a space */
-			if (line[len] != ' ')
+			if (line.str[len] != ' ')
 				return false;
 
 			/* find the next space */
-			space = memchr (&line[len + 1], ' ', size - len - 1);
+			space = memchr (&line.str[len + 1], ' ', line.len - len - 1);
 
 			if (space == NULL)
 				return false;
 
 			*method = i;
-			*location = &line[len + 1];
-			*location_size = space - *location;
-			*version = space + 1;
-			*version_size = &line[size - 2] - *version;
+			location->len = space - &line.str[len + 1];
+			location->str = &line.str[len + 1];
+			version->len = &line.str[line.len - 2] - (space + 1);
+			version->str = space + 1;
 
 			return true;
 		}
@@ -386,31 +395,27 @@ proxy_client_work (void *ud)
 		goto error;
 
 	const char *headptr = &buffer[0];
-	const char *line;
-	size_t line_size;
+	struct string line;
 
-	if ( ! proxy_header_line (&headptr, &header_size, &line, &line_size))
+	if ( ! proxy_header_line (&headptr, &header_size, &line))
 		goto error;
 
 	enum http_method method;
-	const char *location;
-	size_t location_size;
-	const char *version;
-	size_t version_size;
+	struct string location;
+	struct string version;
 
-	if ( ! proxy_header_parse_head (line, line_size, &method, &location, &location_size, &version, &version_size))
+	if ( ! proxy_header_parse_head (line, &method, &location, &version))
 		goto error;
 
-	struct string url = { location_size, location };
 	struct string host;
 	struct string path;
 	struct string port;
 
-	if ( ! proxy_url_parse (url, &host, &path, &port))
+	if ( ! proxy_url_parse (location, &host, &path, &port))
 		goto error;
 
-	/*printf ("--->%.*s<---\n", (int) url.len, url.str);
-	printf ("--->%.*s<---\n", (int) host.len, host.str);
+	//printf ("--->%.*s<---\n", (int) location.len, location.str);
+	/*printf ("--->%.*s<---\n", (int) host.len, host.str);
 	printf ("--->%.*s<---\n", (int) path.len, path.str);
 	printf ("--->%.*s<---\n", (int) port.len, port.str);*/
 
@@ -436,18 +441,19 @@ proxy_client_work (void *ud)
 	if (gai != 0)
 	{
 		fprintf (stderr, "getaddrinfo: %s\n", gai_strerror (gai));
+
 		goto error;
 	}
 
 	/* try all addresses until one succeeds */
 	for (aip = res; aip; aip = aip->ai_next)
 	{
-		// char str[1234];
-		// proxy_log_get_address (aip->ai_addr, aip->ai_addrlen, str, sizeof (str));
+		char str[INET6_ADDRSTRLEN];
+		proxy_log_get_address (aip->ai_addr, aip->ai_addrlen, str, sizeof (str));
 
 		conn->server_fd = socket (aip->ai_family, aip->ai_socktype, aip->ai_protocol);
 
-		// printf ("!!!!-> %s (%d)\n", str, conn->server_fd);
+		printf ("!!!!-> %s (%d)\n", str, conn->server_fd);
 
 		if (conn->server_fd == -1)
 		{
@@ -478,9 +484,29 @@ proxy_client_work (void *ud)
 	/* send what we have so far to the server */
 	ssize_t sent_bytes = 0;
 
+	{
+		size_t off = 0;
+		char rq[strlen (str_http_method[method]) + 1 + path.len + 1 + version.len + 2];
+		memcpy (rq, str_http_method[method], strlen (str_http_method[method]));
+		off += strlen (str_http_method[method]);
+		rq[off++] = ' ';
+		memcpy (&rq[off], path.str, path.len);
+		off += path.len;
+		rq[off++] = ' ';
+		memcpy (&rq[off], version.str, version.len);
+		off += version.len;
+		rq[off++] = '\r';
+		rq[off++] = '\n';
+
+		ssize_t a = send (conn->server_fd, rq, sizeof (rq), MSG_MORE | MSG_NOSIGNAL);
+		assert (a == sizeof (rq));
+	}
+
+	bytes -= line.len;
+
 	while (sent_bytes < bytes)
 	{
-		status = send (conn->server_fd, buffer + sent_bytes, bytes - sent_bytes, MSG_MORE | MSG_NOSIGNAL);
+		status = send (conn->server_fd, headptr + sent_bytes, bytes - sent_bytes, MSG_MORE | MSG_NOSIGNAL);
 
 		if (status == -1)
 		{
@@ -585,7 +611,7 @@ proxy_client_work (void *ud)
 		conn->log,
 		(struct sockaddr *) &conn->client_addr,
 		conn->client_len,
-		url,
+		location,
 		0
 	);
 
@@ -758,6 +784,8 @@ proxy_accept (struct proxy *proxy)
 
 		return;
 	}
+
+	memset (conn, 0, sizeof (*conn));
 
 	conn->log = &proxy->log;
 	conn->client_len = sizeof (conn->client_addr);
