@@ -1,6 +1,8 @@
 /*
  * proxy.c - HTTP Proxy
  *
+ * This program depends on ISO 9899:1999. If using gcc, compile with -std=c99
+ *
  * TEAM MEMBERS:
  *     Gabríel Arthúr Pétursson <gabriel13@ru.is>
  *     Gunnar Guðvarðarson <gunnargud13@ru.is>
