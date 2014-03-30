@@ -604,7 +604,7 @@ proxy_buffer_shift (struct proxy_buffer *buffer)
 	assert (buffer);
 
 	/* already shifted */
-	if (buffer->pos == buffer->size)
+	if (buffer->pos % sizeof (buffer->buf) == buffer->size)
 		return;
 
 	begin = (buffer->pos + sizeof (buffer->buf) - buffer->size) % sizeof (buffer->buf);
@@ -615,6 +615,7 @@ proxy_buffer_shift (struct proxy_buffer *buffer)
 	memcpy (buffer->buf, aux, buffer->size);
 
 	buffer->pos = buffer->size;
+	buffer->pos %= sizeof (buffer->buf);
 }
 
 /* Number of bytes in the buffer */
@@ -808,6 +809,8 @@ proxy_client_connect (
 	if (gai != 0)
 	{
 		fprintf (stderr, "getaddrinfo: %s\n", gai_strerror (gai));
+		fprintf (stderr, "name: %zu '%s'\n", node.len, str_node);
+		fprintf (stderr, "service: %zu '%s'\n", service.len, str_service);
 
 		return -1;
 	}
@@ -825,7 +828,7 @@ proxy_client_connect (
 
 			perror ("socket");
 
-			return -1;
+			break;
 		}
 		else
 		{
@@ -844,7 +847,9 @@ proxy_client_connect (
 				perror ("close");
 			}
 
-			return -1;
+			sock = -1;
+
+			break;
 		}
 	}
 
@@ -1036,6 +1041,10 @@ proxy_client_work (void *ud)
 	proxy_buffer_remove (&conn->crecv_buffer, header_size);
 
 	conn->server_fd = proxy_client_connect (host, port, &conn->server_addr, &conn->server_len);
+
+	if (conn->server_fd == -1)
+		goto error;
+
 	conn->server_connected = true;
 
 	if (method == CONNECT)
