@@ -2,3 +2,4 @@
 proxy
 .goutputstream-*
 core.*
+proxy.log

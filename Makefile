@@ -12,7 +12,7 @@ all: proxy
 proxy: $(OBJS)
 
 proxy.o: proxy.c
-	$(CC) $(CFLAGS) -c proxy.c
+	$(CC) $(CFLAGS) -c proxy.c -std=c99
 
 handin:
 	cp proxy.c $(HANDINDIR)/$(shell whoami)-$(VERSION)-proxy.c
