@@ -3,7 +3,7 @@ HANDINDIR = /labs/proxylab/handin/$(shell whoami)
 
 CC = gcc
 CFLAGS = -Wall -g -pedantic
-LDFLAGS = -lpthread
+LDFLAGS = -lpthread -pthread
 
 OBJS = proxy.o
 
