@@ -737,7 +737,7 @@ proxy_header_parse_head (
 
 /*
  * Parses a header line to get the key and value of that line
-*/
+ */
 static bool
 proxy_header_parse_line (
 	const struct string line,

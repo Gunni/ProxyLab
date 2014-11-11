@@ -1,10 +1,10 @@
-****************
 HTTP Proxy
-****************
 
-Makefile	- For building and handing in proxy
-README		- This file
+NOTE: Not fully HTTP 1.1 compliant.
+
+Makefile - For building proxy
+README   - This file
 
 # Proxy source files
-proxy.{c,h}	- Primary proxy code
+proxy.c - Primary proxy code
 
