@@ -28,6 +28,7 @@
 #define _GNU_SOURCE
 #include <assert.h>
 #include <errno.h>
+#include <getopt.h>
 #include <inttypes.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -172,7 +173,7 @@ static bool proxy_client_process (struct proxy_connection *conn);
 static void *proxy_client_work (void *ud);
 
 /* proxy functions */
-static int proxy_init (struct proxy *proxy, int port);
+static int proxy_init (struct proxy *proxy, const char *listen_address, const char *port);
 static void proxy_free (struct proxy *proxy);
 static void proxy_accept (struct proxy *proxy);
 
@@ -1212,9 +1213,11 @@ error:
  * connections.
  */
 static int
-proxy_init (struct proxy *proxy, int port)
+proxy_init (struct proxy *proxy, const char *listen_address, const char *port)
 {
-	struct sockaddr_in6 addr;
+	struct addrinfo hints;
+	struct addrinfo *res = NULL;
+	int gai;
 
 	proxy_log_init (&proxy->log);
 
@@ -1237,12 +1240,26 @@ proxy_init (struct proxy *proxy, int port)
 		return -1;
 	}
 
-	proxy->socket = socket (PF_INET6, SOCK_STREAM, 0);
+	memset (&hints, 0, sizeof (hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+
+	gai = getaddrinfo (listen_address, port, &hints, &res);
+
+	if (gai != 0)
+	{
+		fprintf (stderr, "getaddrinfo: %s\n", gai_strerror (gai));
+
+		return -1;
+	}
+
+	proxy->socket = socket (res->ai_family, SOCK_STREAM, 0);
 
 	if (proxy->socket == -1)
 	{
 		perror ("socket");
 
+		freeaddrinfo (res);
 		proxy_log_free (&proxy->log);
 
 		if (pthread_attr_destroy (&proxy->attr) != 0)
@@ -1259,6 +1276,7 @@ proxy_init (struct proxy *proxy, int port)
 	{
 		perror("setsockopt");
 
+		freeaddrinfo (res);
 		proxy_log_free (&proxy->log);
 
 		if (pthread_attr_destroy (&proxy->attr) != 0)
@@ -1274,16 +1292,11 @@ proxy_init (struct proxy *proxy, int port)
 		return -1;
 	}
 
-	memset (&addr, 0, sizeof (addr));
-
-	addr.sin6_family = AF_INET6;
-	addr.sin6_port = htons (port);
-	addr.sin6_addr = in6addr_any;
-
-	if (bind (proxy->socket, (struct sockaddr *) &addr, sizeof (addr)) == -1)
+	if (bind (proxy->socket, res->ai_addr, res->ai_addrlen) == -1)
 	{
 		perror ("bind");
 
+		freeaddrinfo (res);
 		proxy_log_free (&proxy->log);
 
 		if (pthread_attr_destroy (&proxy->attr) != 0)
@@ -1298,6 +1311,8 @@ proxy_init (struct proxy *proxy, int port)
 
 		return -1;
 	}
+
+	freeaddrinfo (res);
 
 	if (listen (proxy->socket, SOMAXCONN) == -1)
 	{
@@ -1390,16 +1405,45 @@ proxy_accept (struct proxy *proxy)
 int main(int argc, char **argv)
 {
 	struct proxy proxy;
+	const char *listen_address = "::";
+	const char *listen_port = "8080";
 
 	/* Check arguments */
-	if (argc != 2)
+	while (1)
 	{
-		fprintf (stderr, "Usage: %s <port number>\n", argv[0]);
+		int option_index = 0;
 
-		return EXIT_FAILURE;
+		static const struct option long_options[] = {
+			{ "listen", required_argument, 0, 'l' },
+			{ "port", required_argument, 0, 'p' },
+			{ "help", no_argument, 0, 'h' },
+			{ 0, 0, 0, 0 }
+		};
+
+		int c = getopt_long (argc, argv, "l:p:h", long_options, &option_index);
+
+		if (c == -1)
+			break;
+
+		switch (c)
+		{
+			case 'l':
+				listen_address = optarg;
+				break;
+			case 'p':
+				listen_port = optarg;
+				break;
+			default:
+				printf ("Usage: %s [options]\n", argv[0]);
+				printf ("Options:\n");
+				printf ("\t-l, --listen  Listen address (::)\n");
+				printf ("\t-p, --port    Listen port (8080)\n");
+
+				return EXIT_SUCCESS;
+		}
 	}
 
-	if (proxy_init (&proxy, atoi (argv[1])) != 0)
+	if (proxy_init (&proxy, listen_address, listen_port) != 0)
 	{
 		return EXIT_FAILURE;
 	}
